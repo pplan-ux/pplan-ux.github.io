@@ -1,0 +1,165 @@
+<!doctype html>
+<html>
+<head>
+  <meta charset="utf-8" />
+  <title>Yau Ma Tei Streetscape 360 Research Viewer</title>
+
+  <style>
+    html, body, #container {
+      width: 100%;
+      height: 100%;
+      margin: 0;
+      overflow: hidden;
+    }
+
+    #panel {
+      position: absolute;
+      top: 10px;
+      left: 10px;
+      z-index: 9999;
+      background: rgba(255,255,255,0.94);
+      padding: 10px;
+      border-radius: 8px;
+      font-family: Arial, sans-serif;
+      font-size: 13px;
+      width: 360px;
+      line-height: 1.45;
+    }
+
+    button {
+      margin: 3px;
+    }
+  </style>
+</head>
+
+<body>
+  <div id="container"></div>
+
+  <div id="panel">
+    <b>Yau Ma Tei Streetscape 360 Viewer</b><br>
+    <button id="prevBtn">Prev</button>
+    <button id="nextBtn">Next</button>
+    <button id="dateBtn">Get shooting date</button>
+    <button id="posBtn">Get position</button>
+    <pre id="info"></pre>
+  </div>
+
+  <script type="module">
+    const API_KEY = "PASTE_YOUR_STREETSCAPE_360_API_KEY_HERE";
+
+    const POINTS = [
+      {
+        building_id: "YMT_TEST_001",
+        lng: 114.1708,
+        lat: 22.3124,
+        note: "Yau Ma Tei test point"
+      },
+      {
+        building_id: "YMT_TEST_002",
+        lng: 114.1712,
+        lat: 22.3120,
+        note: "Yau Ma Tei test point 2"
+      }
+    ];
+
+    let currentIndex = 0;
+
+    window.__SS360_READY__ = false;
+    window.__SS360_META__ = {};
+
+    const main = await import(
+      "https://3d.map.gov.hk/mapviewer/files/mms-api/mms-sdk.module.min.js"
+    );
+
+    await main.init({
+      containerId: "container",
+      key: API_KEY
+    });
+
+    function writeInfo(extra = "") {
+      const p = POINTS[currentIndex];
+
+      document.getElementById("info").textContent =
+        `Index: ${currentIndex + 1}/${POINTS.length}\n` +
+        `Building ID: ${p.building_id}\n` +
+        `Lng: ${p.lng}\n` +
+        `Lat: ${p.lat}\n` +
+        `Note: ${p.note || ""}\n` +
+        extra;
+    }
+
+    async function gotoCurrent() {
+      window.__SS360_READY__ = false;
+
+      const p = POINTS[currentIndex];
+
+      try {
+        await main.goto(p.lng, p.lat);
+
+        await new Promise(resolve => setTimeout(resolve, 3000));
+
+        let shootingDate = "";
+        try {
+          shootingDate = await main.getShootingDate();
+        } catch (e) {
+          shootingDate = "";
+        }
+
+        let position = {};
+        try {
+          position = main.getPosition();
+        } catch (e) {
+          position = {};
+        }
+
+        window.__SS360_META__ = {
+          index: currentIndex,
+          building_id: p.building_id,
+          lng: p.lng,
+          lat: p.lat,
+          note: p.note || "",
+          shooting_date: shootingDate,
+          current_position: position
+        };
+
+        writeInfo(`\nShooting date: ${shootingDate}`);
+        window.__SS360_READY__ = true;
+
+      } catch (err) {
+        window.__SS360_META__ = {
+          index: currentIndex,
+          building_id: p.building_id,
+          lng: p.lng,
+          lat: p.lat,
+          error: String(err)
+        };
+
+        writeInfo(`\nERROR:\n${err}`);
+        window.__SS360_READY__ = true;
+      }
+    }
+
+    document.getElementById("prevBtn").onclick = async () => {
+      currentIndex = Math.max(0, currentIndex - 1);
+      await gotoCurrent();
+    };
+
+    document.getElementById("nextBtn").onclick = async () => {
+      currentIndex = Math.min(POINTS.length - 1, currentIndex + 1);
+      await gotoCurrent();
+    };
+
+    document.getElementById("dateBtn").onclick = async () => {
+      const sDate = await main.getShootingDate();
+      writeInfo(`\nShooting date: ${sDate}`);
+    };
+
+    document.getElementById("posBtn").onclick = () => {
+      const pos = main.getPosition();
+      writeInfo(`\nPosition:\n${JSON.stringify(pos, null, 2)}`);
+    };
+
+    await gotoCurrent();
+  </script>
+</body>
+</html>
