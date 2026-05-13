@@ -2,7 +2,7 @@
 <html>
 <head>
   <meta charset="utf-8" />
-  <title>Yau Ma Tei Streetscape 360 Research Viewer</title>
+  <title>Yau Ma Tei Streetscape 360 Road-Grid Viewer</title>
 
   <style>
     html, body, #container {
@@ -10,6 +10,10 @@
       height: 100%;
       margin: 0;
       overflow: hidden;
+    }
+
+    #container {
+      background: #f2f2f2;
     }
 
     #panel {
@@ -22,12 +26,30 @@
       border-radius: 8px;
       font-family: Arial, sans-serif;
       font-size: 13px;
-      width: 360px;
+      width: 390px;
       line-height: 1.45;
+      box-shadow: 0 2px 10px rgba(0,0,0,0.18);
+    }
+
+    body.capture #panel {
+      display: none;
     }
 
     button {
       margin: 3px;
+      padding: 4px 8px;
+    }
+
+    #info {
+      margin-top: 8px;
+      white-space: pre-wrap;
+      max-height: 360px;
+      overflow: auto;
+    }
+
+    #status {
+      margin-top: 6px;
+      color: #555;
     }
   </style>
 </head>
@@ -36,67 +58,87 @@
   <div id="container"></div>
 
   <div id="panel">
-    <b>Yau Ma Tei Streetscape 360 Viewer</b><br>
+    <b>Yau Ma Tei Streetscape 360 Road-Grid Viewer</b><br>
     <button id="prevBtn">Prev</button>
     <button id="nextBtn">Next</button>
     <button id="dateBtn">Get shooting date</button>
     <button id="posBtn">Get position</button>
+    <button id="reloadBtn">Reload current</button>
+    <div id="status">Initializing...</div>
     <pre id="info"></pre>
   </div>
 
   <script type="module">
     const API_KEY = "ab7ad9ab4b2f4e0682e860978a3aa7c7";
 
-    const POINTS = [
-      {
-        building_id: "YMT_TEST_001",
-        lng: 114.1708,
-        lat: 22.3124,
-        note: "Yau Ma Tei test point"
-      },
-      {
-        building_id: "YMT_TEST_002",
-        lng: 114.1712,
-        lat: 22.3120,
-        note: "Yau Ma Tei test point 2"
-      }
-    ];
+    const params = new URLSearchParams(window.location.search);
+    const startIndex = Number(params.get("i") || 0);
+    const captureMode = params.get("capture") === "1";
 
-    let currentIndex = 0;
+    if (captureMode) {
+      document.body.classList.add("capture");
+    }
 
     window.__SS360_READY__ = false;
     window.__SS360_META__ = {};
 
-    const main = await import(
-      "https://3d.map.gov.hk/mapviewer/files/mms-api/mms-sdk.module.min.js"
-    );
+    let points = [];
+    let currentIndex = 0;
+    let main = null;
 
-    await main.init({
-      containerId: "container",
-      key: API_KEY
-    });
+    function setStatus(text) {
+      const el = document.getElementById("status");
+      if (el) el.textContent = text;
+    }
 
     function writeInfo(extra = "") {
-      const p = POINTS[currentIndex];
+      const p = points[currentIndex] || {};
 
       document.getElementById("info").textContent =
-        `Index: ${currentIndex + 1}/${POINTS.length}\n` +
-        `Building ID: ${p.building_id}\n` +
-        `Lng: ${p.lng}\n` +
-        `Lat: ${p.lat}\n` +
+        `Index: ${currentIndex + 1}/${points.length}\n` +
+        `Sample ID: ${p.sample_id || ""}\n` +
+        `Lng: ${p.lng || ""}\n` +
+        `Lat: ${p.lat || ""}\n` +
+        `Local X: ${p.x_local || ""}\n` +
+        `Local Y: ${p.y_local || ""}\n` +
+        `Obs: ${p.obs_tag || ""}\n` +
+        `Dist to initial fire: ${p.dist_to_initial_fire_m || ""}\n` +
         `Note: ${p.note || ""}\n` +
         extra;
+    }
+
+    function markReady(meta) {
+      window.__SS360_META__ = meta || {};
+      window.__SS360_READY__ = true;
+    }
+
+    async function loadPoints() {
+      // 加时间戳，避免 GitHub Pages / 浏览器缓存旧 points.json
+      const url = `./points.json?ts=${Date.now()}`;
+      const resp = await fetch(url);
+      if (!resp.ok) {
+        throw new Error(`Cannot load points.json: HTTP ${resp.status}`);
+      }
+      const data = await resp.json();
+      if (!Array.isArray(data) || data.length === 0) {
+        throw new Error("points.json is empty or not an array.");
+      }
+      return data;
     }
 
     async function gotoCurrent() {
       window.__SS360_READY__ = false;
 
-      const p = POINTS[currentIndex];
+      const p = points[currentIndex];
+
+      setStatus(`Loading sample ${currentIndex + 1}/${points.length}: ${p.sample_id || ""}`);
+      writeInfo("\nLoading Streetscape 360...");
 
       try {
-        await main.goto(p.lng, p.lat);
+        await main.goto(Number(p.lng), Number(p.lat));
 
-        await new Promise(resolve => setTimeout(resolve, 3000));
+        // 给街景瓦片和位置状态留足加载时间
+        await new Promise(resolve => setTimeout(resolve, 4000));
 
         let shootingDate = "";
         try {
@@ -112,54 +154,112 @@
           position = {};
         }
 
-        window.__SS360_META__ = {
+        const meta = {
           index: currentIndex,
-          building_id: p.building_id,
+          sample_id: p.sample_id || "",
+          building_id: p.building_id || p.sample_id || "",
           lng: p.lng,
           lat: p.lat,
-          note: p.note || "",
+          x_local: p.x_local,
+          y_local: p.y_local,
+          obs_tag: p.obs_tag || "",
+          dist_to_initial_fire_m: p.dist_to_initial_fire_m || "",
           shooting_date: shootingDate,
-          current_position: position
+          current_position: position,
+          error: ""
         };
 
-        writeInfo(`\nShooting date: ${shootingDate}`);
-        window.__SS360_READY__ = true;
+        setStatus("Ready");
+        writeInfo(`\nShooting date: ${shootingDate}\n\nCurrent position:\n${JSON.stringify(position, null, 2)}`);
+        markReady(meta);
 
       } catch (err) {
-        window.__SS360_META__ = {
+        const meta = {
           index: currentIndex,
-          building_id: p.building_id,
+          sample_id: p.sample_id || "",
+          building_id: p.building_id || p.sample_id || "",
           lng: p.lng,
           lat: p.lat,
+          x_local: p.x_local,
+          y_local: p.y_local,
+          obs_tag: p.obs_tag || "",
+          dist_to_initial_fire_m: p.dist_to_initial_fire_m || "",
+          shooting_date: "",
+          current_position: {},
           error: String(err)
         };
 
+        setStatus("Error");
         writeInfo(`\nERROR:\n${err}`);
+        markReady(meta);
+      }
+    }
+
+    async function boot() {
+      try {
+        setStatus("Loading points.json...");
+        points = await loadPoints();
+
+        currentIndex = Math.max(0, Math.min(startIndex, points.length - 1));
+
+        setStatus("Loading Streetscape 360 SDK...");
+        main = await import(
+          "https://3d.map.gov.hk/mapviewer/files/mms-api/mms-sdk.module.min.js"
+        );
+
+        setStatus("Initializing Streetscape 360...");
+        await main.init({
+          containerId: "container",
+          key: API_KEY
+        });
+
+        document.getElementById("prevBtn").onclick = async () => {
+          currentIndex = Math.max(0, currentIndex - 1);
+          await gotoCurrent();
+        };
+
+        document.getElementById("nextBtn").onclick = async () => {
+          currentIndex = Math.min(points.length - 1, currentIndex + 1);
+          await gotoCurrent();
+        };
+
+        document.getElementById("reloadBtn").onclick = async () => {
+          await gotoCurrent();
+        };
+
+        document.getElementById("dateBtn").onclick = async () => {
+          try {
+            const sDate = await main.getShootingDate();
+            writeInfo(`\nShooting date: ${sDate}`);
+          } catch (e) {
+            writeInfo(`\nShooting date error: ${e}`);
+          }
+        };
+
+        document.getElementById("posBtn").onclick = () => {
+          try {
+            const pos = main.getPosition();
+            writeInfo(`\nPosition:\n${JSON.stringify(pos, null, 2)}`);
+          } catch (e) {
+            writeInfo(`\nPosition error: ${e}`);
+          }
+        };
+
+        await gotoCurrent();
+
+      } catch (err) {
+        setStatus("Boot error");
+        document.getElementById("info").textContent = String(err);
+
+        window.__SS360_META__ = {
+          index: startIndex,
+          error: String(err)
+        };
         window.__SS360_READY__ = true;
       }
     }
 
-    document.getElementById("prevBtn").onclick = async () => {
-      currentIndex = Math.max(0, currentIndex - 1);
-      await gotoCurrent();
-    };
-
-    document.getElementById("nextBtn").onclick = async () => {
-      currentIndex = Math.min(POINTS.length - 1, currentIndex + 1);
-      await gotoCurrent();
-    };
-
-    document.getElementById("dateBtn").onclick = async () => {
-      const sDate = await main.getShootingDate();
-      writeInfo(`\nShooting date: ${sDate}`);
-    };
-
-    document.getElementById("posBtn").onclick = () => {
-      const pos = main.getPosition();
-      writeInfo(`\nPosition:\n${JSON.stringify(pos, null, 2)}`);
-    };
-
-    await gotoCurrent();
+    boot();
   </script>
 </body>
 </html>
