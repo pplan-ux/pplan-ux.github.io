@@ -1,0 +1,364 @@
+<!doctype html>
+<html>
+<head>
+  <meta charset="utf-8" />
+  <title>Yau Ma Tei FDS Fire Anchor Review</title>
+
+  <style>
+    html, body, #container {
+      width: 100%;
+      height: 100%;
+      margin: 0;
+      overflow: hidden;
+    }
+
+    #container {
+      background: #f2f2f2;
+    }
+
+    #panel {
+      position: absolute;
+      top: 10px;
+      left: 10px;
+      z-index: 9999;
+      background: rgba(255,255,255,0.94);
+      padding: 10px;
+      border-radius: 8px;
+      font-family: Arial, sans-serif;
+      font-size: 13px;
+      width: 460px;
+      line-height: 1.45;
+      box-shadow: 0 2px 10px rgba(0,0,0,0.18);
+    }
+
+    body.capture #panel {
+      display: none;
+    }
+
+    button {
+      margin: 3px;
+      padding: 4px 8px;
+      cursor: pointer;
+    }
+
+    input {
+      width: 64px;
+      padding: 3px 5px;
+      margin-left: 4px;
+    }
+
+    #info {
+      margin-top: 8px;
+      white-space: pre-wrap;
+      max-height: 470px;
+      overflow: auto;
+      background: #fafafa;
+      border: 1px solid #ddd;
+      padding: 8px;
+      border-radius: 6px;
+    }
+
+    #status {
+      margin-top: 6px;
+      color: #555;
+    }
+
+    .small {
+      color: #777;
+      font-size: 12px;
+      margin-top: 6px;
+    }
+
+    .row {
+      margin-top: 6px;
+    }
+  </style>
+</head>
+
+<body>
+  <div id="container"></div>
+
+  <div id="panel">
+    <b>Yau Ma Tei FDS Fire Anchor Review</b><br>
+
+    <div class="row">
+      <button id="prevBtn">Prev</button>
+      <button id="nextBtn">Next</button>
+      <button id="reloadBtn">Reload current</button>
+    </div>
+
+    <div class="row">
+      Jump to index:
+      <input id="jumpInput" type="number" min="1" value="1">
+      <button id="jumpBtn">Go</button>
+      <button id="copyBtn">Copy info</button>
+    </div>
+
+    <div class="row">
+      <button id="dateBtn">Get shooting date</button>
+      <button id="posBtn">Get position</button>
+    </div>
+
+    <div id="status">Initializing...</div>
+    <div class="small">
+      Tip: i in URL is zero-based. Example: ?i=0 means first point.
+    </div>
+    <pre id="info"></pre>
+  </div>
+
+  <script type="module">
+    // Replace this with your Streetscape 360 API key.
+    const API_KEY = "ab7ad9ab4b2f4e0682e860978a3aa7c7";
+
+    const params = new URLSearchParams(window.location.search);
+    const startIndex = Number(params.get("i") || 0);
+    const captureMode = params.get("capture") === "1";
+
+    if (captureMode) {
+      document.body.classList.add("capture");
+    }
+
+    window.__SS360_READY__ = false;
+    window.__SS360_META__ = {};
+
+    let points = [];
+    let currentIndex = 0;
+    let main = null;
+
+    function setStatus(text) {
+      const el = document.getElementById("status");
+      if (el) el.textContent = text;
+    }
+
+    function pointInfoText(extra = "") {
+      const p = points[currentIndex] || {};
+
+      return (
+        `Index: ${currentIndex + 1}/${points.length}\n` +
+        `Review order: ${p.review_order ?? ""}\n\n` +
+
+        `Fire ID: ${p.fire_id || ""}\n` +
+        `Base Fire ID: ${p.base_fire_id || ""}\n` +
+        `Fire height type: ${p.fire_height_type || ""}\n` +
+        `Anchor type: ${p.anchor_type || ""}\n\n` +
+
+        `Sample ID: ${p.sample_id || ""}\n` +
+        `Building ID: ${p.building_id || ""}\n` +
+        `Cell ID: ${p.cell_id || ""}\n\n` +
+
+        `Lng: ${p.lng || ""}\n` +
+        `Lat: ${p.lat || ""}\n` +
+        `Local X: ${p.x_local || ""}\n` +
+        `Local Y: ${p.y_local || ""}\n` +
+        `Local Z: ${p.z_local || ""}\n` +
+        `Building height: ${p.building_height_m || ""}\n\n` +
+
+        `VLM risk: ${p.vlm_fire_risk_weighted || p.vlm_fire_risk || ""}\n` +
+        `Risk level: ${p.risk_level || ""}\n` +
+        `Best view: ${p.best_view || ""}\n` +
+        `Short reason: ${p.short_reason || ""}\n\n` +
+
+        `Suggested manual row:\n${p.manual_row_hint || ""}\n\n` +
+
+        `Obs: ${p.obs_tag || ""}\n` +
+        `Note: ${p.note || ""}\n` +
+        extra
+      );
+    }
+
+    function writeInfo(extra = "") {
+      document.getElementById("info").textContent = pointInfoText(extra);
+      document.getElementById("jumpInput").value = currentIndex + 1;
+    }
+
+    function markReady(meta) {
+      window.__SS360_META__ = meta || {};
+      window.__SS360_READY__ = true;
+    }
+
+    async function loadPoints() {
+      // Timestamp avoids GitHub Pages/browser cache during iterative update.
+      const url = `./points.json?ts=${Date.now()}`;
+      const resp = await fetch(url);
+      if (!resp.ok) {
+        throw new Error(`Cannot load points.json: HTTP ${resp.status}`);
+      }
+      const data = await resp.json();
+      if (!Array.isArray(data) || data.length === 0) {
+        throw new Error("points.json is empty or not an array.");
+      }
+      return data;
+    }
+
+    async function gotoIndex(idx) {
+      currentIndex = Math.max(0, Math.min(idx, points.length - 1));
+      await gotoCurrent();
+    }
+
+    async function gotoCurrent() {
+      window.__SS360_READY__ = false;
+
+      const p = points[currentIndex];
+
+      setStatus(`Loading ${currentIndex + 1}/${points.length}: ${p.fire_id || p.sample_id || ""}`);
+      writeInfo("\nLoading Streetscape 360...");
+
+      try {
+        await main.goto(Number(p.lng), Number(p.lat));
+
+        // Wait for tiles / internal status.
+        await new Promise(resolve => setTimeout(resolve, 4000));
+
+        let shootingDate = "";
+        try {
+          shootingDate = await main.getShootingDate();
+        } catch (e) {
+          shootingDate = "";
+        }
+
+        let position = {};
+        try {
+          position = main.getPosition();
+        } catch (e) {
+          position = {};
+        }
+
+        const meta = {
+          index: currentIndex,
+          review_order: p.review_order ?? "",
+          fire_id: p.fire_id || "",
+          base_fire_id: p.base_fire_id || "",
+          fire_height_type: p.fire_height_type || "",
+          anchor_type: p.anchor_type || "",
+          sample_id: p.sample_id || "",
+          building_id: p.building_id || p.sample_id || "",
+          cell_id: p.cell_id || "",
+          lng: p.lng,
+          lat: p.lat,
+          x_local: p.x_local,
+          y_local: p.y_local,
+          z_local: p.z_local,
+          building_height_m: p.building_height_m,
+          obs_tag: p.obs_tag || "",
+          shooting_date: shootingDate,
+          current_position: position,
+          error: ""
+        };
+
+        setStatus("Ready");
+        writeInfo(
+          `\nShooting date: ${shootingDate}\n\n` +
+          `Current position:\n${JSON.stringify(position, null, 2)}`
+        );
+        markReady(meta);
+
+      } catch (err) {
+        const meta = {
+          index: currentIndex,
+          review_order: p.review_order ?? "",
+          fire_id: p.fire_id || "",
+          base_fire_id: p.base_fire_id || "",
+          fire_height_type: p.fire_height_type || "",
+          anchor_type: p.anchor_type || "",
+          sample_id: p.sample_id || "",
+          building_id: p.building_id || p.sample_id || "",
+          cell_id: p.cell_id || "",
+          lng: p.lng,
+          lat: p.lat,
+          x_local: p.x_local,
+          y_local: p.y_local,
+          z_local: p.z_local,
+          building_height_m: p.building_height_m,
+          obs_tag: p.obs_tag || "",
+          shooting_date: "",
+          current_position: {},
+          error: String(err)
+        };
+
+        setStatus("Error");
+        writeInfo(`\nERROR:\n${err}`);
+        markReady(meta);
+      }
+    }
+
+    async function boot() {
+      try {
+        setStatus("Loading points.json...");
+        points = await loadPoints();
+
+        currentIndex = Math.max(0, Math.min(startIndex, points.length - 1));
+
+        setStatus("Loading Streetscape 360 SDK...");
+        main = await import(
+          "https://3d.map.gov.hk/mapviewer/files/mms-api/mms-sdk.module.min.js"
+        );
+
+        setStatus("Initializing Streetscape 360...");
+        await main.init({
+          containerId: "container",
+          key: API_KEY
+        });
+
+        document.getElementById("prevBtn").onclick = async () => {
+          await gotoIndex(currentIndex - 1);
+        };
+
+        document.getElementById("nextBtn").onclick = async () => {
+          await gotoIndex(currentIndex + 1);
+        };
+
+        document.getElementById("reloadBtn").onclick = async () => {
+          await gotoCurrent();
+        };
+
+        document.getElementById("jumpBtn").onclick = async () => {
+          const v = Number(document.getElementById("jumpInput").value || 1);
+          await gotoIndex(v - 1);
+        };
+
+        document.getElementById("copyBtn").onclick = async () => {
+          const text = pointInfoText("");
+          try {
+            await navigator.clipboard.writeText(text);
+            setStatus("Copied current point info.");
+          } catch (e) {
+            setStatus("Copy failed. Select text manually.");
+          }
+        };
+
+        document.getElementById("dateBtn").onclick = async () => {
+          try {
+            const sDate = await main.getShootingDate();
+            writeInfo(`\nShooting date: ${sDate}`);
+          } catch (e) {
+            writeInfo(`\nShooting date error: ${e}`);
+          }
+        };
+
+        document.getElementById("posBtn").onclick = () => {
+          try {
+            const pos = main.getPosition();
+            writeInfo(`\nPosition:\n${JSON.stringify(pos, null, 2)}`);
+          } catch (e) {
+            writeInfo(`\nPosition error: ${e}`);
+          }
+        };
+
+        await gotoCurrent();
+
+      } catch (err) {
+        setStatus("Boot error");
+        document.getElementById("info").textContent = String(err);
+
+        window.__SS360_META__ = {
+          index: startIndex,
+          error: String(err)
+        };
+        window.__SS360_READY__ = true;
+      }
+    }
+
+    boot();
+  </script>
+</body>
+</html>
